@@ -1,0 +1,5 @@
+glob:.project
+glob:.settings/*
+glob:bin/*
+glob:tests-bin/*
+glob:test-output/*
