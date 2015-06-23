@@ -1,12 +1,8 @@
 package com.mwdiamond;
 
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.collect.FluentIterable;
-import com.google.common.collect.ForwardingMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterators;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 
 import java.util.AbstractCollection;
@@ -18,154 +14,114 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-public class ChainMap<K, V> extends ForwardingMap<K, V> {
-  @SuppressWarnings("unchecked")
-  private final V NULL_SENTINAL = (V)new Object();
-
-  private final HashMap<K, V> mutable = new HashMap<>();
+public class ChainMap<K, V> implements Map<K, V> {
+  private final HashMap<K, V> innerMap = new HashMap<>();
   private final List<Map<K, V>> chain;
 
   @SuppressWarnings("unchecked")
   public ChainMap(Iterable<? extends Map<? extends K, ? extends V>> maps) {
     chain = new ImmutableList.Builder<Map<K, V>>()
-        .add(mutable)
-        .addAll((Iterable<Map<K, V>>) maps)
+        .add(innerMap)
+        // this is a safe cast because nothing in ChainMap allows you to insert
+        // elements into any maps other than the first, innerMap.
+        .addAll((Iterable<? extends Map<K, V>>)maps)
         .build();
   }
 
-  @Override
-  protected Map<K, V> delegate() {
-    return mutable;
-  }
-
-  public Map<K, V> headMap() {
-    return Collections.unmodifiableMap(mutable);
-  }
-
-  private <O> O doLazy(Function<Map<K, V>, Optional<O>> function, O fallback) {
-    for(Map<K, V> map : chain) {
-      Optional<O> result = function.apply(map);
-      if(result.isPresent()) {
-        return result.get();
-      }
-    }
-    return fallback;
+  public Map<K, V> innerMap() {
+    return Collections.unmodifiableMap(innerMap);
   }
 
   @Override
   public int size() {
-    int size = 0;
-    for(Map<K, V> map : chain) {
-      size += map.size();
-    }
-    return size;
+    return keySet().size();
   }
 
   @Override
   public boolean isEmpty() {
-    return doLazy(new Function<Map<K, V>, Optional<Boolean>>() {
-      @Override
-      public Optional<Boolean> apply(Map<K, V> map) {
-        return map.isEmpty() ? Optional.<Boolean>absent() : Optional.of(false);
-      }
-    }, true);
+    return !chain.stream().filter(map -> !map.isEmpty()).findFirst().isPresent();
   }
 
   @Override
-  public boolean containsKey(final Object key) {
-    return doLazy(new Function<Map<K, V>, Optional<Boolean>>() {
-      @Override
-      public Optional<Boolean> apply(Map<K, V> map) {
-        return map.containsKey(key) ? Optional.of(true) : Optional.<Boolean>absent();
-      }
-    }, false);
+  public boolean containsKey(Object key) {
+    return chain.stream().filter(map -> map.containsKey(key)).findFirst().isPresent();
   }
 
   @Override
-  public boolean containsValue(final Object value) {
-    return doLazy(new Function<Map<K, V>, Optional<Boolean>>() {
-      @Override
-      public Optional<Boolean> apply(Map<K, V> map) {
-        return map.containsValue(value) ? Optional.of(true) : Optional.<Boolean>absent();
-      }
-    }, false);
+  public boolean containsValue(Object value) {
+    return chain.stream().filter(map -> map.containsValue(value)).findFirst().isPresent();
   }
 
   @Override
-  public V get(final Object key) {
-    V value = doLazy(new Function<Map<K, V>, Optional<V>>() {
-      @Override
-      public Optional<V> apply(Map<K, V> map) {
-        if(map.containsKey(key)) {
-          V value = map.get(key);
-          return value == null ? Optional.of(NULL_SENTINAL) : Optional.of(value);
-        }
-        return Optional.absent();
-      }
-    }, null);
-    return NULL_SENTINAL.equals(value) ? null : value;
+  public V get(Object key) {
+    return chain.stream().filter(map -> map.containsKey(key)).findFirst().map(map -> map.get(key)).orElse(null);
+  }
+  
+  @Override
+  public V put(K key, V value) {
+      return innerMap.put(key, value);
+  }
+  
+  @Override
+  public void putAll(Map<? extends K, ? extends V> map) {
+      innerMap.putAll(map);
   }
 
   @Override
-  public V remove(final Object key) {
-    V value = doLazy(new Function<Map<K, V>, Optional<V>>() {
-      @Override
-      public Optional<V> apply(Map<K, V> map) {
-        if(map.containsKey(key)) {
-          V value = map.remove(key);
-          return value == null ? Optional.of(NULL_SENTINAL) : Optional.of(value);
-        }
-        return Optional.absent();
-      }
-    }, null);
-    return NULL_SENTINAL.equals(value) ? null : value;
+  public V remove(Object key) {
+    V removed = chain.stream().filter(map -> map.containsKey(key)).findFirst().map(map -> map.remove(key)).orElse(null);
+    // Map.remove() notes:
+    // "The map will not contain a mapping for the specified key once the call returns."
+    chain.stream().forEach(map -> map.remove(key));
+    return removed;
   }
 
   @Override
   public void clear() {
-    for(Map<K, V> map : chain) {
-      map.clear();
-    }
+    chain.forEach(Map::clear);
   }
 
   @Override
   public Set<K> keySet() {
-    Set<K> unionSet = ImmutableSet.of();
-    for(Map<K, V> map : chain) {
-      unionSet = Sets.union(map.keySet(), unionSet);
-    }
-    return unionSet;
+    return chain.stream().map(Map::keySet).reduce(ImmutableSet.of(), (a, b) -> Sets.union(a, b));
   }
 
   @Override
   public Collection<V> values() {
+    Set<Map.Entry<K, V>> entries = entrySet();
     return new AbstractCollection<V>() {
       @Override
       public Iterator<V> iterator() {
-        return Iterators.concat(FluentIterable.from(chain).transform(
-            new Function<Map<K, V>, Iterator<V>>(){
-          @Override
-          public Iterator<V> apply(Map<K, V> map) {
-            return map.values().iterator();
-          }}).iterator());
+        return entries.stream().map(e -> e.getValue()).iterator();
       }
 
       @Override
       public int size() {
-        int size = 0;
-        for(Map<K, V> map : chain) {
-          size += map.values().size();
-        }
-        return size;
+        return entries.size();
       }};
   }
 
   @Override
   public Set<Map.Entry<K, V>> entrySet() {
-    Set<Map.Entry<K, V>> unionSet = ImmutableSet.of();
-    for(Map<K, V> map : chain) {
-      unionSet = Sets.union(map.entrySet(), unionSet);
-    }
-    return unionSet;
+    return (chain.size() == 1 ? chain.get(0) : Maps.asMap(keySet(), key -> get(key))).entrySet();
+  }
+  
+  @Override
+  public boolean equals(Object obj) {
+      if (obj instanceof Map) {
+          return entrySet().equals(((Map<?,?>)obj).entrySet());
+      }
+      return false;
+  }
+  
+  @Override
+  public int hashCode() {
+      return entrySet().hashCode();
+  }
+  
+  @Override
+  public String toString() {
+      String entryString = entrySet().toString();
+      return "{" + entryString.substring(1, entryString.length()-1) + "}";
   }
 }
