@@ -1,6 +1,7 @@
 package com.mwdiamond;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
@@ -13,6 +14,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 public class ChainMap<K, V> implements Map<K, V> {
   private final HashMap<K, V> innerMap = new HashMap<>();
@@ -30,6 +33,10 @@ public class ChainMap<K, V> implements Map<K, V> {
 
   public Map<K, V> innerMap() {
     return Collections.unmodifiableMap(innerMap);
+  }
+  
+  public List<Map<K, V>> maps() {
+      return chain.stream().map(m -> Collections.unmodifiableMap(m)).collect(Collectors.toList());
   }
 
   @Override
@@ -49,7 +56,7 @@ public class ChainMap<K, V> implements Map<K, V> {
 
   @Override
   public boolean containsValue(Object value) {
-    return chain.stream().filter(map -> map.containsValue(value)).findFirst().isPresent();
+    return entrySet().stream().filter(e -> value == e.getValue() || (value != null && value.equals(e.getValue()))).findFirst().isPresent();
   }
 
   @Override
@@ -59,7 +66,9 @@ public class ChainMap<K, V> implements Map<K, V> {
   
   @Override
   public V put(K key, V value) {
-      return innerMap.put(key, value);
+      V oldValue = get(key);
+      innerMap.put(key, value);
+      return oldValue;
   }
   
   @Override
@@ -82,6 +91,11 @@ public class ChainMap<K, V> implements Map<K, V> {
   }
 
   @Override
+  public Set<Map.Entry<K, V>> entrySet() {
+    return (chain.size() == 1 ? chain.get(0) : Maps.asMap(keySet(), key -> get(key))).entrySet();
+  }
+
+  @Override
   public Set<K> keySet() {
     return chain.stream().map(Map::keySet).reduce(ImmutableSet.of(), (a, b) -> Sets.union(a, b));
   }
@@ -99,11 +113,6 @@ public class ChainMap<K, V> implements Map<K, V> {
       public int size() {
         return entries.size();
       }};
-  }
-
-  @Override
-  public Set<Map.Entry<K, V>> entrySet() {
-    return (chain.size() == 1 ? chain.get(0) : Maps.asMap(keySet(), key -> get(key))).entrySet();
   }
   
   @Override
@@ -124,4 +133,10 @@ public class ChainMap<K, V> implements Map<K, V> {
       String entryString = entrySet().toString();
       return "{" + entryString.substring(1, entryString.length()-1) + "}";
   }
+  
+  public static <K, V> Map<K, V> immutableChainView(Iterable<? extends Map<? extends K, ? extends V>> maps) {
+      return StreamSupport.stream(maps.spliterator(), false).reduce((Map<K,V>)ImmutableMap.<K,V>of(),
+        (a, b) -> Maps.asMap(Sets.union(a.keySet(), b.keySet()), k -> a.containsKey(k) ? a.get(k) : b.get(k)),
+        (a, b) -> Maps.asMap(Sets.union(a.keySet(), b.keySet()), k -> a.containsKey(k) ? a.get(k) : b.get(k)));
+    }
 }
