@@ -9,7 +9,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Demonstrates how to signal handling works in Java, along with different edge cases.
+ * Demonstrates how signal handling works in Java, along with different edge cases.
+ * https://docs.oracle.com/javase/8/docs/technotes/guides/troubleshoot/signals.html#BABIFHBI
  */
 public class SignalsDemo {
   private static final long START_TIME = System.nanoTime();
@@ -117,7 +118,7 @@ public class SignalsDemo {
   }
 
   /**
-   * If a signal is suppressed, the handler will be reused. You can safely swap out the handler
+   * If a signal is sent again, the handler will be reused. You can safely swap out the handler
    * while another handler is running (though there is a race condition, so do the swap early).
    *
    * args:
@@ -140,6 +141,7 @@ public class SignalsDemo {
           @Override
           public void handle(Signal signal) {
             log("Caught " + signal + ", exiting!");
+            // Non-standard exit code to see this is what caused the exit
             System.exit(100 + signal.getNumber());
           }
         });
@@ -153,18 +155,45 @@ public class SignalsDemo {
   }
 
   /**
+   * Demonstrates replacing then restoring the default handler behavior.
+   *
+   * Despite the name, SignalHandler.SIG_DFL is not the signal handler used for INT, TERM, and HUP.
+   * The "real" default behavior is defined in java.lang.Terminator:
+   * http://hg.openjdk.java.net/jdk8/jdk8/jdk/file/jdk8-b131/src/solaris/classes/java/lang/Terminator.java
+   * and simply calls System.exit().  You could just manually replicate this by calling
+   * System.exit() in your handler, or you can capture the original behavior and restore it later.
+   */
+  public static void restoreDefault(@SuppressWarnings("unused") String[] args) {
+    SignalHandler original = Signal.handle(SIGINT, new SignalHandler() {
+      @Override public void handle(Signal signal) {
+        log("Suppressing " + signal);
+      }});
+
+    new Thread() {
+      @Override
+      public void run() {
+        while (true) {
+          safeSleep(1);
+          send(SIGINT);
+        }
+      }
+    }.start();
+
+    safeSleep(5);
+    log("Restoring original handler");
+    Signal.handle(SIGINT, original);
+  }
+
+  /**
    * Just for testing the default behavior.
    */
   public static void manual(@SuppressWarnings("unused") String[] args) {
-    // Interestingly, uncommenting this line causes a error, though it should be a no-op.
-    //Signal.handle(SIGINT, SignalHandler.SIG_DFL);
-    send(SIGINT);
-    log("Sleeping, send a SIGINT");
+    log("Sleeping, send a signal");
     safeSleep(100);
   }
 
   /**
-   * This triggers a SEGV on my machine, apparently you can't trigger the default behavior manually.
+   * This triggers a SEGV on my machine, apparently you can't trigger the SIG_DFL behavior manually.
    */
   public static void segv(@SuppressWarnings("unused") String[] args) {
     SignalHandler.SIG_DFL.handle(SIGINT);
